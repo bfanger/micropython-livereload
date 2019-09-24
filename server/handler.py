@@ -1,12 +1,12 @@
 class Handler:
-    def __init__(self, disk, conn):
+    def __init__(self, disk, socket):
         self.disk = disk
-        self.conn = conn
+        self.socket = socket
 
     def handle(self):
         while True:
             try:
-                line = str(self.conn.readline(), "ascii")
+                line = str(self.socket.readline(), "ascii")
                 args = line[1:-1].split(",")
                 if not line:
                     print("Disconnected?", line)
@@ -14,17 +14,16 @@ class Handler:
                 if line[0] == "I":
                     print("IOCTL", args)
                     val = self.disk.ioctl(int(args[0]), int(args[1]))
-                    self.conn.send(encode(val) + "\n")
+                    self.socket.write(encode(val) + "\n")
                     continue
                 if line[0] == "R":
                     print("READ", args)
                     buf = bytearray(int(args[1]))
                     self.disk.readblocks(int(args[0]), buf)
-                    self.conn.send(buf)
+                    self.socket.write(buf)
                     continue
 
                 print("Unknown command", line)
-                # self.conn.send("O1")
             except OSError:
                 print("connection error")
                 return False
@@ -37,3 +36,4 @@ def encode(value):
     if isinstance(value, int):
         return str(value)
     raise Exception("No encoder for ", type(value))
+

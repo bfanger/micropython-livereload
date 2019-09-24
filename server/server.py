@@ -1,8 +1,8 @@
 import uos
 import usocket
 
-import ramdisk
-import handler
+from ramdisk import Ramdisk
+from handler import Handler
 
 
 class Server:
@@ -13,7 +13,7 @@ class Server:
     def _create_disk(self):
         self._counter += 1
         target = "/ramdisk" + str(self._counter)
-        disk = ramdisk.Ramdisk(512, 50)
+        disk = Ramdisk(512, 500)  # 250 KiB
         uos.VfsFat.mkfs(disk)
         vfs = uos.VfsFat(disk)
         uos.mount(vfs, target)
@@ -42,8 +42,8 @@ class Server:
                 conn, addr = socket.accept()
                 print("Connected")
                 disk = self._create_disk()
-                h = handler.Handler(disk, conn)
-                h.handle()
+                handler = Handler(disk, conn)
+                handler.handle()
 
         except KeyboardInterrupt:
             pass

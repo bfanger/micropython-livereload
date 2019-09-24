@@ -1,13 +1,17 @@
-import network
-import machine
+import livereload
 
+LIVERELOAD_SERVER = "10.0.0.20"
+WIFI_SSID = ""
+WIFI_PASSWORD = ""
 
-wlan = network.WLAN(network.STA_IF)
-while not wlan.isconnected():
-    status = wlan.status()
-    if status == network.STAT_CONNECTING:
-        machine.idle()
-    else:
-        print("Network status:", status)
-        break
+if WIFI_SSID:
+    import network
 
+    wlan = network.WLAN(network.STA_IF)
+    wlan.connect(WIFI_SSID, WIFI_PASSWORD)
+
+livereload.wait_for_network()
+livereload.connect(LIVERELOAD_SERVER, 1808)
+
+# import a script from the livereload server
+import main

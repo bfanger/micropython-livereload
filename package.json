@@ -5,6 +5,6 @@
     "docker:server": "docker run -v $PWD:/app --rm -i --sig-proxy=false  micropython-coverage server/main.py example",
     "docker:watch": "find server -name '*.py'|entr -rs 'yarn docker:server'",
     "mpy:server": "find server -name '*.py'|entr -rs './mpy server/main.py example'",
-    "mpy:client": "find client -name '*.py'|entr -rs './mpy client/main.py'"
+    "mpy:client": "find client -name '*.py'|entr -rs './mpy client/boot.py'"
   }
 }
