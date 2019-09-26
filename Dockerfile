@@ -7,12 +7,17 @@ RUN apk add --update alpine-sdk xz python3 bsd-compat-headers libffi-dev &&\
 ADD http://micropython.org/resources/source/micropython-${MPY_VERSION}.tar.xz /src/
 RUN tar -xf /src/micropython-${MPY_VERSION}.tar.xz -C /src/ &&\
     cd /src/micropython-${MPY_VERSION}/ports/unix &&\
+    # Build micropython_coverage
     make coverage &&\
-    mv /src/micropython-${MPY_VERSION}/ports/unix/micropython_coverage /usr/local/bin/micropython_coverage
+    mv /src/micropython-${MPY_VERSION}/ports/unix/micropython_coverage /bin/micropython_coverage &&\
+    # Build regular micropython
+    make clean && make &&\
+    mv /src/micropython-${MPY_VERSION}/ports/unix/micropython /bin/micropython
 
 FROM alpine:3.10
 RUN apk add --update libffi && rm /var/cache/apk/*
-COPY --from=0 /usr/local/bin/micropython_coverage /micropython_coverage
+COPY --from=0 /bin/micropython_coverage /bin/micropython_coverage
+COPY --from=0 /bin/micropython /bin/micropython
 WORKDIR  /app
 
-ENTRYPOINT [ "/micropython_coverage" ]
+ENTRYPOINT [ "/bin/micropython_coverage" ]

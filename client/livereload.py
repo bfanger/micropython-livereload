@@ -1,6 +1,7 @@
 import uos
 import sys
 import usocket
+import uselect
 
 DEBUG = True
 
@@ -17,10 +18,16 @@ class Socketdisk:
     def __init__(self, host, port):
         self.addr = usocket.getaddrinfo(host, port)[0][-1]
         self.socket = usocket.socket(usocket.AF_INET, usocket.SOCK_STREAM)
+        self.poller = uselect.poll()
+        self.poller.register(self.socket, uselect.POLLIN)
+        self.locked = False
 
     def readblocks(self, block_num, buf):
+        self.detect()
+        self.locked = True
         self.socket.write("R" + str(block_num) + "," + str(len(buf)) + "\n")
         self.socket.readinto(buf)
+        self.locked = False
 
     def writeblocks(self, block_num, buf):
         raise Exception("readonly (for now)")
@@ -35,19 +42,58 @@ class Socketdisk:
             self.socket.close()
             return
 
+        self.detect()
+        self.locked = True
         self.socket.write("I" + str(op) + "," + str(arg) + "\n")
         response = self.socket.readline()
+        self.locked = False
         return eval(response)
 
+    # Detect if there is data availabel for reading on the socket
+    # Which would mean a disconnect or reload trigger.
+    def detect(self):
+        if self.locked:
+            return
+        events = self.poller.poll(0)
+        if not events:
+            return
+        (socket, event) = events[0]
+        self.locked = True
+        if event & uselect.POLLIN:
+            cmd = socket.readline()
+            if cmd == b"LIVERELOAD\n":
+                log("Change detected")
+                socket.close()
+                restart(0)
+                return
+        if event & uselect.POLLHUP:
+            log("Connection lost")
+            restart(3)
+            return
+        self.locked = False
 
+
+# Connect to the livereload server
 def connect(host, port):
+    global disk
     log("Connecting to " + host + ":" + str(port))
-    vfs = uos.VfsFat(Socketdisk(host, port))
+    disk = Socketdisk(host, port)
+    vfs = uos.VfsFat(disk)
     uos.mount(vfs, "/__livereload__")
-
     uos.chdir("/__livereload__")
     sys.path.insert(0, "/__livereload__/lib")
     sys.path.insert(0, "/__livereload__")
+
+
+# Connect to a wifi network
+# Not needed for unix port
+# Not needed for esp8266 port (which remembers wifi settings across reboots)
+def wifi(ssid, password):
+    import network
+
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(ssid, password)
 
 
 # Wait until the wifi is connected
@@ -68,3 +114,44 @@ def wait_for_network():
         else:
             log("Network status:", status)
             break
+
+
+# Detect if the code has changed.
+# When no or negative interval is given
+# The unix port doesn't have Timers and must therefor call `liveload.detect()` directly to enable livereload.
+def detect(interval_ms=-1):
+    global disk
+    global timer
+    disk.detect()
+    if interval_ms <= 0:
+        return
+    from machine import Timer
+
+    timer = Timer(-1)
+    timer.init(
+        period=interval_ms, mode=Timer.PERIODIC, callback=lambda _: disk.detect()
+    )
+
+
+# Restart the program (using the updated source files)
+def restart(countdown):
+    if countdown:
+        import utime
+
+        log("Restarting in:")
+        log(3)
+        utime.sleep(1)
+        log(2)
+        utime.sleep(1)
+        log(1)
+        utime.sleep(1)
+    else:
+        log("Restarting now...")
+
+    try:
+        from machine import reset
+
+        reset()
+    except ImportError:
+        log("machine.reset() not available")
+        sys.exit(808)
