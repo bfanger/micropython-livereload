@@ -22,10 +22,21 @@ The server need a micropython with VfsFat enabled.
 
 ### Via docker
 
+Build the image:
+
+```sh
+git clone https://github.com/bfanger/micropython_livereload
+cd micropython_livereload
+docker build --tag micropython-livereload .
 ```
-docker build --tag micropython-coverage .
-alias mpy="docker run -v $PWD:/app --rm -it micropython-coverage"
+
+In your project folder run:
+
+```sh
+docker run -v $PWD:/app --rm -it --publish 1808:1808 micropython-livereload /livereload/main.py /app
 ```
+
+(of change `$PWD` to the folder with your main.py)
 
 ### macOS
 
@@ -54,8 +65,9 @@ Every client get it's own immutable filesystem (readonly and remains the same un
 - Faster reload: Use "soft reboot" (expose `soft_reset()` to python)
 - Faster reload: Use usb-serial / UART (skip networking)
 - Publish as a upip package
+- Publish to docker hub
 
 # Known bugs
 
-- Reload on all file saves. Should only reload when a (used) **python** file has **changed**.
+- Reloads on all file saves. Should only reload when a (used) **python** file has **changed**.
 - A hard reset is not detected by the socket.

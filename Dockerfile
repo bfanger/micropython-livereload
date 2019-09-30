@@ -18,6 +18,7 @@ FROM alpine:3.10
 RUN apk add --update libffi && rm /var/cache/apk/*
 COPY --from=0 /bin/micropython_coverage /bin/micropython_coverage
 COPY --from=0 /bin/micropython /bin/micropython
+COPY server /livereload
 WORKDIR  /app
 
 ENTRYPOINT [ "/bin/micropython_coverage" ]

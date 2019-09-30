@@ -37,19 +37,22 @@ class Server:
                 self.idle()
                 continue
             for (socket, event) in ready:
-                # print(socket, event)
                 if socket == self.socket:
                     conn, _ = socket.accept()
                     self.add_connection(conn)
                 else:
                     for (conn, handler) in self.connections:
                         if socket == conn:
+                            remove = False
                             if event & uselect.POLLIN:
-                                handler.procesRequest()
+                                remove = not handler.procesRequest()
                             if event & uselect.POLLHUP:
-                                self.remove_connection(conn)
+                                remove = True
                             if event & uselect.POLLERR:
                                 print("poll error")
+                                remove = True
+
+                            if remove:
                                 self.remove_connection(conn)
 
     def idle(self):

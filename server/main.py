@@ -13,7 +13,6 @@ else:
 
     def reload():
         if w.detect():
-            # cleanup = []
             for (_, handler) in s.connections:
                 if w.mtime > handler.mtime:
                     handler.livereload()
