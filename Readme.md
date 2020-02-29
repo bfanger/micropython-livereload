@@ -46,8 +46,13 @@ Download full source from: http://www.micropython.org/download
 brew install libffi
 export PKG_CONFIG_PATH="/usr/local/opt/libffi/lib/pkgconfig"
 
+cd micropython-?.??/mpy-cross
+make
 cd micropython-?.??/ports/unix
-make coverage
+sed -i '' 's/VARIANT ?= standard/VARIANT ?= coverage/g' Makefile
+sed -i '' 's/CWARN = -Wall -Werror/CWARN = -Wall/g' Makefile
+make submodules
+make
 ```
 
 # How it works
