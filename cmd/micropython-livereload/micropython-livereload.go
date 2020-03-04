@@ -21,10 +21,35 @@ func main() {
 	if cmd == "" {
 		cmd = cwd + "/micropython-coverage"
 	}
-	mpy := &micropython.Interpreter{
-		Command: cmd,
-		Dir:     cwd + "/py",
+	// mpy := &micropython.CLI{
+	// 	Command: cmd,
+	// 	Dir:     cwd + "/py",
+	// }
+	mpy, err := micropython.Open("/dev/tty.SLAB_USBtoUART", 115200)
+	if err != nil {
+		panic(err)
 	}
+	code := "print(1 + 2, end = '')"
+	output, err := mpy.Eval(code)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("Code   : %s\nOutput : %s\n", code, output)
+	// info, err := micropython.GetInfo(mpy)
+	// if err != nil {
+	// 	panic(err)
+	// }
+}
+
+func showInfo(mpy micropython.Interpreter) {
+	info, err := micropython.GetInfo(mpy)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%+v", info)
+}
+
+func createDisk(mpy micropython.Interpreter) {
 	output, err := mpy.Eval(`
 import fatfs;
 d = fatfs.create(50)
@@ -41,11 +66,8 @@ d.dump()
 	}
 	fmt.Printf("\nsize %dkb\n", len(ram)/1024)
 	fmt.Printf("%s", ram)
-
-	// d.add("../example/test.py", "test.py")
-
 }
-func calculator(mpy *micropython.Interpreter) {
+func calculator(mpy micropython.Interpreter) {
 	code := "print(1 + 2)"
 	output, err := mpy.Eval(code)
 	if err != nil {
