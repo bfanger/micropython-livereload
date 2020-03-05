@@ -35,10 +35,8 @@ func main() {
 		panic(err)
 	}
 	fmt.Printf("Code   : %s\nOutput : %s\n", code, output)
-	// info, err := micropython.GetInfo(mpy)
-	// if err != nil {
-	// 	panic(err)
-	// }
+
+	showInfo(mpy)
 }
 
 func showInfo(mpy micropython.Interpreter) {

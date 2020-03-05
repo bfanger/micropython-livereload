@@ -3,10 +3,8 @@ package micropython
 import (
 	"bufio"
 	"bytes"
-	"io"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/pkg/term"
@@ -60,28 +58,36 @@ else:
 	}
 	lines := strings.Split(string(output), "\n")
 	return &Info{
-		Name:    lines[0],
-		Version: lines[1],
+		Name:    strings.Trim(lines[0], "\r\n"),
+		Version: strings.Trim(lines[1], "\r\n"),
 	}, err
 }
 
+type Mode int
+
+const (
+	Unknown Mode = iota
+	Repl
+	RawRepl
+	Output
+)
+
 type Board struct {
-	tty *term.Term
-	// port   serial.Port
-	Out *bufio.Reader
-	// Input *bufio.Writer
+	tty  *term.Term
+	mode Mode
+	Out  *bufio.Reader
 }
 
 func Open(path string, baud int) (*Board, error) {
 	// port, err := serial.Open(path, &serial.Mode{BaudRate: baud})
-	tty, err := term.Open(path, term.Speed(baud), term.RawMode)
+	tty, err := term.Open(path, term.Speed(baud)) //, term.RawMode
 	if err != nil {
 		return nil, errors.Wrap(err, "couldn't open serial")
 	}
 	return &Board{
-		tty: tty,
-		Out: bufio.NewReader(tty),
-		// Input: bufio.NewWriter(tty),
+		tty:  tty,
+		Out:  bufio.NewReader(tty),
+		mode: Unknown,
 	}, nil
 
 }
@@ -91,85 +97,58 @@ func (b *Board) Close() error {
 	}
 	return b.tty.Close()
 }
+
 func (b *Board) Eval(code string) ([]byte, error) {
-	script := []byte(code)
+	ctrla := []byte{1}
+	ctrlb := []byte{2}
 	ctrlc := []byte{3}
-	b.tty.Write(ctrlc)
-	var buf bytes.Buffer
-	gt := 0
-	reading := false
+	ctrld := []byte{4}
+	if b.mode == Unknown {
+		b.tty.Write([]byte{13})
+		b.tty.Write(ctrlc)
+		b.tty.Write(ctrlb)
+	} else if b.mode == RawRepl {
+		b.tty.Write([]byte(code))
+		b.tty.Write(ctrld)
+	} else {
+		return nil, errors.New("Unexpected mode")
+	}
+	buf := make([]byte, 4)
+	var output bytes.Buffer
+	prompt := []byte{'>', '>', '>', 32}
+	ok := []byte{'O', 'K'}
+	end := []byte{4, 4, '>'}
 	for {
 		char := make([]byte, 1)
 		if _, err := b.Out.Read(char); err != nil {
 			return nil, err
 		}
-		if reading {
-			buf.Write(char)
-		}
-		if char[0] == 32 {
-			if gt == 3 {
-				if reading {
-					return buf.Bytes()[len(script)+2 : buf.Len()-4], nil
-				}
-				b.tty.Write(script)
-				b.tty.Write([]byte{13})
-				reading = true
+		buf = append(buf[1:], char[0])
+		// fmt.Print(string(char[0]))
+
+		switch b.mode {
+		case Unknown:
+			if bytes.Compare(buf, prompt) == 0 {
+				b.mode = Repl
+				b.tty.Write(ctrla)
+
+			}
+		case Repl:
+			if char[0] == '>' {
+				b.mode = RawRepl
+				b.tty.Write([]byte(code))
+				b.tty.Write(ctrld)
+			}
+		case RawRepl:
+			if bytes.Compare(buf[2:], ok) == 0 {
+				b.mode = Output
+			}
+		case Output:
+			output.Write(char)
+			if bytes.Compare(buf[1:], end) == 0 {
+				b.mode = RawRepl
+				return output.Bytes()[:output.Len()-3], nil
 			}
 		}
-		if char[0] == '>' {
-			gt++
-		} else {
-			gt = 0
-		}
 	}
-}
-
-// ReadUntil : Read until there is no new data for x duration
-func ReadUntil(r io.Reader, d time.Duration) ([]byte, error) {
-	// var output bytes.Buffer
-	// errs := make(chan error)
-
-	// pr, pw := io.Pipe()
-
-	//
-	// var m sync.Mutex
-	// done := false
-	// go func() {
-	// 	buf := make([]byte, 1024)
-	// 	for {
-	// 		l, err := r.Read(buf)
-	// 		if err != nil {
-	// 			errs <- err
-	// 			return
-	// 		}
-	// 		// fmt.Printf("%s", buf[0:l]) // works?
-	// 		m.Lock()
-	// 		if done {
-	// 			m.Unlock()
-	// 			return
-	// 		}
-	// 		w.Write(buf[0:l])
-	// 		m.Unlock()
-	// 	}
-	// }()
-	// for {
-	// 	select {
-	// 	case err := <-errs:
-	// 		return nil, err
-	// 	case <-time.After(d):
-	// 		// m.Lock()
-	// 		// fmt.Println(w.Buffered())
-	// 		// b2 := make([]byte, 50)
-	// 		// pr.Read(b2)
-	// 		// _ = pr
-	// 		// if output.Len() != 0 {
-	// 		// 	done = true
-
-	// 		// 	m.Unlock()
-	// 		// 	return output.Bytes(), nil
-	// 		// }
-	// 		// m.Unlock()
-	// 	}
-	// }
-	return nil, nil
 }
