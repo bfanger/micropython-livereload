@@ -29,13 +29,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	code := "print(1 + 2, end = '')"
-	output, err := mpy.Eval(code)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("Code   : %s\nOutput : %s\n", code, output)
-
+	defer mpy.Close()
+	eval(mpy, "x = 5")
+	eval(mpy, "print(x + 2)")
 	showInfo(mpy)
 }
 
@@ -65,11 +61,10 @@ d.dump()
 	fmt.Printf("\nsize %dkb\n", len(ram)/1024)
 	fmt.Printf("%s", ram)
 }
-func calculator(mpy micropython.Interpreter) {
-	code := "print(1 + 2)"
+func eval(mpy micropython.Interpreter, code string) {
 	output, err := mpy.Eval(code)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("%s: \"%s\"", code, output)
+	fmt.Printf("Code   : %s\nOutput : %s\n", code, output)
 }

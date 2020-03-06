@@ -3,25 +3,31 @@ package micropython
 import (
 	"bufio"
 	"bytes"
+	"fmt"
+	"io"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
-	"github.com/pkg/term"
+	"go.bug.st/serial"
 )
 
 type Interpreter interface {
 	Eval(code string) ([]byte, error)
+	Close() error
 }
 
 type CLI struct {
 	Command string
 	Dir     string
+	cmd     *exec.Cmd
 }
 
 // Eval: Run python code and return the results (if any)
 func (cli *CLI) Eval(code string) ([]byte, error) {
 	cmd := exec.Command(cli.Command)
+	cli.cmd = cmd
 	cmd.Dir = cli.Dir
 	cmd.Stdin = bytes.NewBufferString(code)
 	var stdout bytes.Buffer
@@ -29,6 +35,7 @@ func (cli *CLI) Eval(code string) ([]byte, error) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+	cli.cmd = nil
 	if stderr.Len() != 0 {
 		return nil, errors.Errorf("python error: %s", stderr)
 	}
@@ -36,6 +43,13 @@ func (cli *CLI) Eval(code string) ([]byte, error) {
 		return nil, err
 	}
 	return stdout.Bytes(), nil
+}
+
+func (cli *CLI) Close() error {
+	if cli.cmd == nil {
+		return nil
+	}
+	return cli.cmd.Process.Kill()
 }
 
 type Info struct {
@@ -69,85 +83,157 @@ const (
 	Unknown Mode = iota
 	Repl
 	RawRepl
-	Output
+	Running
 )
 
+const debug = false
+
+/**
+ * Uses the REPL to run python scripts
+ * https://docs.micropython.org/en/latest/reference/repl.html
+ */
+
 type Board struct {
-	tty  *term.Term
+	io   io.ReadWriteCloser
 	mode Mode
-	Out  *bufio.Reader
+	err  error
+	out  chan byte
 }
 
 func Open(path string, baud int) (*Board, error) {
-	// port, err := serial.Open(path, &serial.Mode{BaudRate: baud})
-	tty, err := term.Open(path, term.Speed(baud)) //, term.RawMode
+	io, err := serial.Open(path, &serial.Mode{BaudRate: baud})
 	if err != nil {
 		return nil, errors.Wrap(err, "couldn't open serial")
 	}
-	return &Board{
-		tty:  tty,
-		Out:  bufio.NewReader(tty),
+	b := &Board{
+		io:   io,
 		mode: Unknown,
-	}, nil
-
-}
-func (b *Board) Close() error {
-	if err := b.tty.Restore(); err != nil {
-		return err
+		out:  make(chan byte),
 	}
-	return b.tty.Close()
+	go func() {
+		buf := make([]byte, 1)
+		r := bufio.NewReader(io)
+		for {
+			if _, err := r.Read(buf); err != nil {
+				b.err = err
+				if debug {
+					fmt.Println("read failed")
+				}
+				close(b.out)
+				return
+			}
+			if debug {
+				if int(buf[0]) < 32 {
+					fmt.Printf("[%d]", buf[0])
+				} else {
+					fmt.Print(string(buf))
+				}
+			}
+			b.out <- buf[0]
+		}
+	}()
+	return b, nil
+}
+
+func (b *Board) Close() error {
+	if b.mode == RawRepl {
+		b.io.Write([]byte{2})
+	}
+	return b.io.Close()
 }
 
 func (b *Board) Eval(code string) ([]byte, error) {
-	ctrla := []byte{1}
-	ctrlb := []byte{2}
-	ctrlc := []byte{3}
-	ctrld := []byte{4}
-	if b.mode == Unknown {
-		b.tty.Write([]byte{13})
-		b.tty.Write(ctrlc)
-		b.tty.Write(ctrlb)
-	} else if b.mode == RawRepl {
-		b.tty.Write([]byte(code))
-		b.tty.Write(ctrld)
-	} else {
-		return nil, errors.New("Unexpected mode")
+	if err := b.openRawRepl(); err != nil {
+		return nil, err
 	}
-	buf := make([]byte, 4)
-	var output bytes.Buffer
-	prompt := []byte{'>', '>', '>', 32}
-	ok := []byte{'O', 'K'}
-	end := []byte{4, 4, '>'}
-	for {
-		char := make([]byte, 1)
-		if _, err := b.Out.Read(char); err != nil {
-			return nil, err
+	if _, err := b.io.Write([]byte(code)); err != nil {
+		return nil, err
+	}
+	if _, err := b.io.Write([]byte{4}); err != nil { // Ctrl+D end script
+		return nil, err
+	}
+	if out, err := b.readUntil([]byte("OK"), 0); err != nil { // @todo timeout?
+		return out, err
+	}
+	b.mode = Running
+	out, err := b.readUntil([]byte{4, '>'}, 0)
+	if err != nil {
+		return out, err
+	}
+	b.mode = RawRepl
+
+	if len(out) != 1 {
+		if out[0] == 4 { // python error
+			return nil, errors.New(string(out[1:]))
 		}
-		buf = append(buf[1:], char[0])
-		// fmt.Print(string(char[0]))
+	}
+	return out, nil
+}
+func (b *Board) openRawRepl() error {
+	if b.mode == RawRepl {
+		return nil
+	}
+	if err := b.openRepl(); err != nil {
+		return errors.Wrap(err, "could open REPL")
+	}
+	if _, err := b.io.Write([]byte{1}); err != nil { // Ctrl+A Open raw REPL
+		return err
+	}
+	if _, err := b.readUntil([]byte{'>'}, 200*time.Millisecond); err != nil {
+		return errors.Wrap(err, "could open raw mode")
+	}
+	b.mode = RawRepl
+	return nil
+}
 
-		switch b.mode {
-		case Unknown:
-			if bytes.Compare(buf, prompt) == 0 {
-				b.mode = Repl
-				b.tty.Write(ctrla)
+func (b *Board) openRepl() error {
+	prompt := []byte{'>', '>', '>', 32}
+	switch b.mode {
+	case Repl:
+		return nil
+	case Unknown:
+		_, err := b.readUntil(prompt, time.Millisecond) // prompt in buffer?
+		if err != nil {
+			if _, err := b.io.Write([]byte{3}); err != nil { // Ctrl+C stop running script
+				return err
+			}
+			_, err = b.readUntil(prompt, 1500*time.Millisecond)
+			if err != nil {
+				if _, err := b.io.Write([]byte{2}); err != nil { // Ctrl+B Exit raw or reboot
+					return err
+				}
+				if _, err = b.readUntil(prompt, 5*time.Second); err != nil {
+					return err
+				}
+			}
+		}
+		b.mode = Repl
+		return nil
 
+	default:
+		return errors.Errorf("unexpected mode: %d", b.mode)
+	}
+}
+
+func (b *Board) readUntil(sequence []byte, d time.Duration) ([]byte, error) {
+	var out bytes.Buffer
+	buf := make([]byte, len(sequence))
+	for {
+		timeout := time.After(d)
+		if d == 0 {
+			timeout = nil
+		}
+		select {
+		case <-timeout:
+			return nil, errors.Errorf("timed out %s", d)
+		case char, ok := <-b.out:
+			if !ok {
+				return nil, b.err
 			}
-		case Repl:
-			if char[0] == '>' {
-				b.mode = RawRepl
-				b.tty.Write([]byte(code))
-				b.tty.Write(ctrld)
-			}
-		case RawRepl:
-			if bytes.Compare(buf[2:], ok) == 0 {
-				b.mode = Output
-			}
-		case Output:
-			output.Write(char)
-			if bytes.Compare(buf[1:], end) == 0 {
-				b.mode = RawRepl
-				return output.Bytes()[:output.Len()-3], nil
+			out.WriteByte(char)
+			buf = append(buf[1:], char)
+			if bytes.Compare(buf, sequence) == 0 {
+				return out.Bytes()[:out.Len()-len(sequence)], nil
 			}
 		}
 	}
