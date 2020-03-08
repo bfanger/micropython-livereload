@@ -14,7 +14,8 @@ import (
 )
 
 type Interpreter interface {
-	Eval(code string) ([]byte, error)
+	Run(script string) ([]byte, error) // Run script from empty state
+	Eval(code string) ([]byte, error)  // Evalute code
 	Close() error
 }
 
@@ -25,11 +26,11 @@ type CLI struct {
 }
 
 // Eval: Run python code and return the results (if any)
-func (cli *CLI) Eval(code string) ([]byte, error) {
+func (cli *CLI) Run(script string) ([]byte, error) {
 	cmd := exec.Command(cli.Command)
 	cli.cmd = cmd
 	cmd.Dir = cli.Dir
-	cmd.Stdin = bytes.NewBufferString(code)
+	cmd.Stdin = bytes.NewBufferString(script)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	var stderr bytes.Buffer
@@ -50,6 +51,10 @@ func (cli *CLI) Close() error {
 		return nil
 	}
 	return cli.cmd.Process.Kill()
+}
+
+func (cli *CLI) Eval(script string) ([]byte, error) {
+	return nil, errors.New("Not implemented (yet)")
 }
 
 type Info struct {
@@ -137,11 +142,18 @@ func Open(path string, baud int) (*Board, error) {
 
 func (b *Board) Close() error {
 	if b.mode == RawRepl {
+		// Send Ctrl+B (Exit raw REPL) for faster REPL detection.
 		b.io.Write([]byte{2})
 	}
 	return b.io.Close()
 }
 
+func (b *Board) Run(script string) ([]byte, error) {
+	if err := b.Reset(); err != nil {
+		return nil, err
+	}
+	return b.Eval(script)
+}
 func (b *Board) Eval(code string) ([]byte, error) {
 	if err := b.openRawRepl(); err != nil {
 		return nil, err
@@ -149,10 +161,11 @@ func (b *Board) Eval(code string) ([]byte, error) {
 	if _, err := b.io.Write([]byte(code)); err != nil {
 		return nil, err
 	}
-	if _, err := b.io.Write([]byte{4}); err != nil { // Ctrl+D end script
+	// Send Ctrl+D (End of Transmission)
+	if _, err := b.io.Write([]byte{4}); err != nil {
 		return nil, err
 	}
-	if out, err := b.readUntil([]byte("OK"), 0); err != nil { // @todo timeout?
+	if out, err := b.readUntil([]byte("OK"), 0); err != nil {
 		return out, err
 	}
 	b.mode = Running
@@ -169,6 +182,25 @@ func (b *Board) Eval(code string) ([]byte, error) {
 	}
 	return out, nil
 }
+
+func (b *Board) Reset() error {
+	if err := b.openRepl(); err != nil {
+		return err
+	}
+	b.io.Write([]byte{4})
+	b.mode = Unknown
+
+	return b.openRepl()
+}
+func (b *Board) HardReset() error {
+	b.Eval(`
+import machine
+machine.reset()
+`)
+	b.mode = Unknown
+	return nil
+}
+
 func (b *Board) openRawRepl() error {
 	if b.mode == RawRepl {
 		return nil
@@ -176,10 +208,11 @@ func (b *Board) openRawRepl() error {
 	if err := b.openRepl(); err != nil {
 		return errors.Wrap(err, "could open REPL")
 	}
-	if _, err := b.io.Write([]byte{1}); err != nil { // Ctrl+A Open raw REPL
+	// Send Ctrl+A (Start of Heading) to open raw REPL
+	if _, err := b.io.Write([]byte{1}); err != nil {
 		return err
 	}
-	if _, err := b.readUntil([]byte{'>'}, 200*time.Millisecond); err != nil {
+	if _, err := b.readUntil([]byte{'>'}, 100*time.Millisecond); err != nil {
 		return errors.Wrap(err, "could open raw mode")
 	}
 	b.mode = RawRepl
@@ -190,6 +223,13 @@ func (b *Board) openRepl() error {
 	prompt := []byte{'>', '>', '>', 32}
 	switch b.mode {
 	case Repl:
+		return nil
+	case RawRepl:
+		b.io.Write([]byte{2}) // Ctrl+B (Exit raw REPL)
+		if _, err := b.readUntil(prompt, 250*time.Millisecond); err != nil {
+			return err
+		}
+		b.mode = Repl
 		return nil
 	case Unknown:
 		_, err := b.readUntil(prompt, time.Millisecond) // prompt in buffer?
@@ -216,6 +256,9 @@ func (b *Board) openRepl() error {
 }
 
 func (b *Board) readUntil(sequence []byte, d time.Duration) ([]byte, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
 	var out bytes.Buffer
 	buf := make([]byte, len(sequence))
 	for {
@@ -227,7 +270,7 @@ func (b *Board) readUntil(sequence []byte, d time.Duration) ([]byte, error) {
 		case <-timeout:
 			return nil, errors.Errorf("timed out %s", d)
 		case char, ok := <-b.out:
-			if !ok {
+			if ok == false {
 				return nil, b.err
 			}
 			out.WriteByte(char)

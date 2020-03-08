@@ -30,8 +30,7 @@ func main() {
 		panic(err)
 	}
 	defer mpy.Close()
-	eval(mpy, "x = 5")
-	eval(mpy, "print(x + 2)")
+
 	showInfo(mpy)
 }
 
@@ -44,7 +43,7 @@ func showInfo(mpy micropython.Interpreter) {
 }
 
 func createDisk(mpy micropython.Interpreter) {
-	output, err := mpy.Eval(`
+	output, err := mpy.Run(`
 import fatfs;
 d = fatfs.create(50)
 d.add("../example/main.py", "main.py")
