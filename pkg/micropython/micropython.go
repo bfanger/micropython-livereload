@@ -38,7 +38,7 @@ func (cli *CLI) Run(script string) ([]byte, error) {
 	err := cmd.Run()
 	cli.cmd = nil
 	if stderr.Len() != 0 {
-		return nil, errors.Errorf("python error: %s", stderr)
+		return nil, errors.Errorf("python error: %s", stderr.String())
 	}
 	if err != nil {
 		return nil, err

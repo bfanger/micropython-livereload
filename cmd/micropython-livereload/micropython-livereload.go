@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/bfanger/micropython-livereload/pkg/micropython"
+	"github.com/fsnotify/fsnotify"
 )
 
 func main() {
@@ -30,8 +31,49 @@ func main() {
 		panic(err)
 	}
 	defer mpy.Close()
-
 	showInfo(mpy)
+	files := make(chan string)
+	go func() {
+		for file := range files {
+			fmt.Println(file)
+		}
+	}()
+	watch(cwd+"/example/", files)
+
+}
+
+func watch(path string, files chan string) {
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		panic(err)
+	}
+	defer watcher.Close()
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					files <- event.Name[len(path):]
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				fmt.Println("error:", err)
+			}
+		}
+	}()
+
+	err = watcher.Add(path)
+	if err != nil {
+		panic(err)
+	}
+	<-done
 }
 
 func showInfo(mpy micropython.Interpreter) {
