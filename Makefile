@@ -14,7 +14,7 @@ test:
 	go test ${TESTS} ${TEST_PARAM}
 
 test-watch:
-	find . -name '*.go'|entr -c -r make test
+	find . -name '*.go'|entr -c -r go test -failfast  ${TESTS} ${TEST_PARAM}
 
 
 py:
