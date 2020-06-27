@@ -26,10 +26,10 @@ import (
 
 const escapeChar = byte('\\')
 
-var openTag = []byte{'<', 'M', 'S', 'G', ' '}
-var closeTag = []byte{'<', '/', 'M', 'S', 'G', '>'}
+var openTag = []byte("<MSG ")
+var closeTag = []byte("</MSG>")
 var escapedTag = append([]byte{escapeChar}, openTag...)
-var minMessageSize = len(openTag) + 4 + len(closeTag)
+var minMessageSize = len(openTag) + 3 + len(closeTag)
 
 func validateChannel(name string) error {
 	if strings.Contains(name, ">") {
@@ -94,44 +94,52 @@ func Read(r io.Reader) (*Message, int, error) {
 			if cursor == 0 && prev == escapeChar {
 				break
 			}
-			if char == openTag[cursor] {
-				cursor++
+			if char != openTag[cursor] {
+				if char == openTag[0] {
+					cursor = 1
+				} else {
+					cursor = 0
+				}
+				break
 			}
+			cursor++
 			if cursor > len(openTag)-1 {
 				mode = Length
 			}
+
 		case Length:
-			if _, err := buf.Write(charBuffer); err != nil {
-				return nil, pos, err
-			}
-			if char == ' ' {
-				length, err = strconv.Atoi(strings.TrimRight(buf.String(), " "))
-				if err != nil {
+			if char != ' ' {
+				if _, err := buf.Write(charBuffer); err != nil {
 					return nil, pos, err
 				}
-				mode = Channel
-				buf.Reset()
+				break
 			}
-		case Channel:
-			if _, err := buf.Write(charBuffer); err != nil {
+			length, err = strconv.Atoi(buf.String())
+			if err != nil {
 				return nil, pos, err
 			}
-			if char == '>' {
-				// mode BODY
-				escaped := make([]byte, length)
-				if n, err := r.Read(escaped); err != nil {
-					return nil, pos + n, err
+			mode = Channel
+			buf.Reset()
+		case Channel:
+			if char != '>' {
+				if _, err := buf.Write(charBuffer); err != nil {
+					return nil, pos, err
 				}
-				pos += length
-				msg = &Message{
-					Channel: strings.TrimRight(buf.String(), ">"),
-					Body:    bytes.ReplaceAll(escaped, escapedTag, openTag),
-				}
-				// escaped :=
-				mode = End
-				buf.Reset()
-				cursor = 0
+				break
 			}
+			// mode BODY
+			escaped := make([]byte, length)
+			if n, err := r.Read(escaped); err != nil {
+				return nil, pos + n, err
+			}
+			pos += length
+			msg = &Message{
+				Channel: buf.String(),
+				Body:    bytes.ReplaceAll(escaped, escapedTag, openTag),
+			}
+			mode = End
+			buf.Reset()
+			cursor = 0
 		case End:
 			if char != closeTag[cursor] {
 				return nil, pos, errors.New("missing closing tag")
@@ -150,26 +158,25 @@ type Muxer struct {
 	mutex sync.Mutex
 }
 
+// NewMuxer
 func NewMuxer(w io.Writer) *Muxer {
 	return &Muxer{w: w}
 }
-func (m *Muxer) Write(b []byte) (int, error) {
-	m.mutex.Lock() // Serialize the writes
-	defer m.mutex.Unlock()
-	return m.w.Write(b)
-}
 
-type Channel struct {
+// Serialize the writes
+type WriteChannel struct {
 	Name string
 	m    *Muxer
 }
 
 func (m *Muxer) Channel(name string) io.Writer {
-	return &Channel{Name: name, m: m}
+	return &WriteChannel{Name: name, m: m}
 }
 
-func (c *Channel) Write(b []byte) (int, error) {
-	if err := Write(c.m, c.Name, b); err != nil {
+func (w *WriteChannel) Write(b []byte) (int, error) {
+	w.m.mutex.Lock()
+	defer w.m.mutex.Unlock()
+	if err := Write(w.m.w, w.Name, b); err != nil {
 		return 0, err
 	}
 	return len(b), nil
@@ -232,4 +239,41 @@ func (s *Scanner) Bytes() []byte {
 }
 func (s *Scanner) Err() error {
 	return s.err
+}
+
+type Demuxer struct {
+	Channels map[string]io.Writer
+	s        *Scanner
+}
+
+func NewDemuxer(r io.Reader, channels map[string]io.Writer) *Demuxer {
+	return &Demuxer{Channels: channels, s: NewScanner(r)}
+}
+
+func (d *Demuxer) Process() error {
+	d.s.Scan()
+	if err := d.s.Err(); err != nil {
+		return err
+	}
+	m := d.s.Message()
+	if d.Channels[m.Channel] == nil {
+		return fmt.Errorf("no io.Writer configured for channel %s", m.Channel)
+	}
+	if _, err := d.Channels[m.Channel].Write(m.Body); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *Demuxer) ProcessAll() error {
+	for {
+		if err := d.Process(); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+
+	}
 }

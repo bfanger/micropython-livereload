@@ -19,6 +19,7 @@ func TestWrite(t *testing.T) {
 		{name: "basic abc", channel: "X", message: []byte("abc"), expected: []byte("<MSG 3 X>abc</MSG>")},
 		{name: "basic DEFGH", channel: "Y", message: []byte("DEFGH"), expected: []byte("<MSG 5 Y>DEFGH</MSG>")},
 		{name: "escaping", channel: "Z", message: []byte("a<MSG b"), expected: []byte("<MSG 8 Z>a\\<MSG b</MSG>")},
+		{name: "empty", channel: "", message: []byte(""), expected: []byte("<MSG 0 ></MSG>")},
 	}
 
 	for _, tc := range tests {
@@ -47,6 +48,9 @@ func TestRead(t *testing.T) {
 		{name: "in stream", encoded: []byte("123 56<MSG 5 Y>DEFGH</MSG>"), expected: &Message{Channel: "Y", Body: []byte("DEFGH")}, read: 26},
 		{name: "no message", encoded: []byte("just a string"), expected: nil, read: 13, err: io.EOF},
 		{name: "escaping", encoded: []byte("<MSG 8 Z>a\\<MSG b</MSG>"), expected: &Message{Channel: "Z", Body: []byte("a<MSG b")}, read: 23, err: nil},
+		{name: "empty", encoded: []byte("<MSG 0 ></MSG>"), expected: &Message{}, read: 14},
+		{name: "incomplete opentag", encoded: []byte("<MS<MSG 1 A>B</MSG>"), expected: &Message{Channel: "A", Body: []byte("B")}, read: 19},
+		{name: "incomplete opentag", encoded: []byte("<MSXD<MSG 1 A>B</MSG>"), expected: &Message{Channel: "A", Body: []byte("B")}, read: 21},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, assertRead(tc.encoded, tc.expected, tc.read, tc.err))
@@ -108,4 +112,18 @@ func TestScanner(t *testing.T) {
 
 	assert.False(s.Scan())
 	assert.Error(io.EOF, s.Err())
+}
+
+func TestDemuxer(t *testing.T) {
+	assert := require.New(t)
+	input := bytes.NewBufferString("<MSG 2 X>AB</MSG><MSG 3 Y>123</MSG><MSG 1 X>C</MSG>")
+	var x bytes.Buffer
+	var y bytes.Buffer
+	d := NewDemuxer(input, map[string]io.Writer{
+		"X": &x,
+		"Y": &y,
+	})
+	assert.NoError(d.ProcessAll())
+	assert.Equal("ABC", x.String())
+	assert.Equal("123", y.String())
 }
